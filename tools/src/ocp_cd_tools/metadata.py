@@ -6,6 +6,7 @@ import assertion
 import constants
 from distgit import ImageDistGitRepo, RPMDistGitRepo
 import exectools
+from pushd import Dir
 import logutil
 
 from model import Model, Missing
@@ -126,10 +127,12 @@ class Metadata(object):
         return cgit_url(self.qualified_name, filename, self.branch())
 
     def fetch_cgit_file(self, filename):
+
         url = self.cgit_url(filename)
         req = exectools.retry(
             3, lambda: urllib.urlopen(url),
             check_f=lambda req: req.code == 200)
+
         return req.read()
 
     def tag_exists(self, tag):

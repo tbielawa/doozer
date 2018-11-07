@@ -92,6 +92,33 @@ def images_clone(runtime):
     runtime.remove_tmp_working_dir = False
 
 
+@cli.command("images:fetch-clean-dockerfile")
+@click.option("--outdir", help="Output directory to write Dockerfiles", required=True)
+@click.option("--suffix", default=None, help="Dockerfile suffix to add", required=False)
+@pass_runtime
+def fetch_dockerfile(runtime, outdir, suffix):
+    runtime.initialize(clone_distgits=False)
+    # Never delete after clone; defeats the purpose of cloning
+    runtime.remove_tmp_working_dir = False
+
+    base_path = os.path.join(outdir, runtime.group)
+    if not os.path.isdir(base_path):
+        os.makedirs(base_path)
+
+    for image in runtime.image_metas():
+        sub_path = os.path.join(base_path, image.name)
+        if not os.path.isdir(sub_path):
+            os.makedirs(sub_path)
+        df_content = image.clean_dockerfile()
+        out_name = 'Dockerfile'
+        if suffix:
+            out_name = '{}.{}'.format(out_name, suffix)
+        out_file = os.path.join(sub_path, out_name)
+        runtime.logger.info('Writing {}'.format(out_file))
+        with open(out_file, 'w') as f:
+            f.write(df_content)
+
+
 @cli.command("rpms:clone", help="Clone a group's rpm distgit repos locally.")
 @pass_runtime
 def rpms_clone(runtime):

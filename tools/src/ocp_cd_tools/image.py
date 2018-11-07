@@ -2,7 +2,7 @@ import os
 import json
 import bashlex
 from dockerfile_parse import DockerfileParser
-from distgit import pull_image
+from distgit import pull_image, OIT_COMMENT_PREFIX
 from metadata import Metadata
 from model import Missing
 from pushd import Dir
@@ -54,10 +54,7 @@ class ImageMetadata(Metadata):
         """
         return self.config.base_only
 
-    def get_rpm_install_list(self, valid_pkg_list=None):
-        """Parse dockerfile and find any RPMs that are being installed
-        It will automatically do any bash variable replacement during this parse
-        """
+    def _get_dfp(self):
         if self._distgit_repo:
             # Already cloned, load from there
             with Dir(self._distgit_repo.distgit_dir):
@@ -67,6 +64,52 @@ class ImageMetadata(Metadata):
             # not yet cloned, just download it
             dfp = DockerfileParser()
             dfp.content = self.fetch_cgit_file("Dockerfile")
+
+        return dfp
+
+    def clean_dockerfile(self):
+
+        dfp = self._get_dfp()
+
+        df_lines = dfp.content.splitlines(False)
+        df_lines = [line for line in df_lines if not line.strip().startswith(OIT_COMMENT_PREFIX)]
+
+        df_content = "\n".join(df_lines)
+
+        dfp.content = df_content
+
+        for l in ['Release', 'release']:
+            if l in dfp.labels:
+                del dfp.labels[l]
+
+        # Modified from distgit._reflow_labels
+        labels = dict(dfp.labels)
+        # Delete any labels from the modeled content
+        for key in dfp.labels:
+            del dfp.labels[key]
+
+        # Capture content without labels
+        df_content = dfp.content.strip()
+
+        df = ''
+        # Write the text back out and append the labels to the end
+        df += ("%s\n\n" % df_content)
+        if labels:
+            df += ("LABEL")
+            for k, v in labels.iteritems():
+                df += (" \\\n")  # All but the last line should have line extension backslash "\"
+                escaped_v = v.replace('"', '\\"')  # Escape any " with \"
+                df += ("        %s=\"%s\"" % (k, escaped_v))
+            df += ("\n\n")
+
+        return df
+
+    def get_rpm_install_list(self, valid_pkg_list=None):
+        """Parse dockerfile and find any RPMs that are being installed
+        It will automatically do any bash variable replacement during this parse
+        """
+
+        dfp = self._get_dfp()
 
         def env_replace(envs, val):
             # find $VAR and ${VAR} style replacements

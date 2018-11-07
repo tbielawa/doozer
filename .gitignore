@@ -12,3 +12,6 @@ htmlcov
 
 # Ignore emacs backup files
 *~
+
+# misc
+Dockerfile
