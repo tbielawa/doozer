@@ -445,6 +445,8 @@ class ImageDistGitRepo(DistGitRepo):
         if push_late != is_late_push:
             return True
 
+        # It is either just one item, the dist-git/brew image, or, it
+        # can be an arbitrary length list of images provided manually
         push_names = []
 
         if push_to_defaults:
@@ -491,7 +493,12 @@ class ImageDistGitRepo(DistGitRepo):
 
                 # pull just the main image name first
                 image_name_and_version = "%s:%s-%s" % (self.config.name, version, release)
+
+                # The source image
                 brew_image_url = "/".join((self.runtime.group_config.urls.brew_image_host, image_name_and_version))
+                # This wouldn't be strictly necessary. Unless it is
+                # IMPLICITLY meant to be done as a sanity check before
+                # attempting further operations.
                 pull_image(brew_image_url)
                 record['message'] = "Successfully pulled image"
                 record['status'] = 0
@@ -500,6 +507,7 @@ class ImageDistGitRepo(DistGitRepo):
                 self.logger.info("Error pulling %s: %s" % (self.metadata.name, err))
                 raise
             finally:
+                # Wouldn't need this either if we aren't pulling every image first
                 self.runtime.add_record('pull', **record)
 
             push_tags = list(tag_list)
@@ -527,6 +535,11 @@ class ImageDistGitRepo(DistGitRepo):
                         # Status defaults to failure until explicitly set by success. This handles raised exceptions.
                     }
 
+                    # We wouldn't need a for loop for this part with
+                    # 'oc image mirror'. The only 'loop'y thing we
+                    # might have to do is to generate all of the
+                    # 'push_url's. With 'oc image mirror' it runs once
+                    # with a variable length set of SRC=DEST arguments
                     for push_tag in push_tags:
                         push_url = '{}:{}'.format(image_name, push_tag)
 
@@ -535,20 +548,29 @@ class ImageDistGitRepo(DistGitRepo):
                             self.logger.info('Would have tagged {} as {}'.format(brew_image_url, push_url))
                             self.logger.info('Would have pushed {}'.format(push_url))
                         else:
+                            # Switching to 'oc image mirror' means we
+                            # won't have to tag each image before
+                            # pushing it
                             rc, out, err = exectools.cmd_gather(["docker", "tag", brew_image_url, push_url])
 
                             if rc != 0:
                                 # Unable to tag the image
                                 raise IOError("Error tagging image as: %s" % push_url)
 
+                            # This would be an invocation of 'oc image mirror'
                             for r in range(10):
                                 self.logger.info("Pushing image to mirror [retry=%d]: %s" % (r, push_url))
                                 rc, out, err = exectools.cmd_gather(["docker", "push", push_url])
                                 if rc == 0:
                                     break
+                                # This is still useful in case the
+                                # mirroring failes. Will exist
+                                # elsewhere though as this for loop
+                                # won't exist anymore
                                 self.logger.info("Error pushing image -- retrying in 60 seconds")
                                 time.sleep(60)
 
+                        # Keep this too, methinks
                         if rc != 0:
                             # Unable to push to registry
                             raise IOError("Error pushing image: %s" % push_url)
