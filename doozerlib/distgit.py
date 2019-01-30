@@ -479,36 +479,8 @@ class ImageDistGitRepo(DistGitRepo):
                 # Read in version information from the Distgit dockerfile
                 _, version, release = self.metadata.get_latest_build_info()
 
-            try:
-                record = {
-                    "distgit_key": self.metadata.distgit_key,
-                    "distgit": '{}/{}'.format(self.metadata.namespace, self.metadata.name),
-                    "image": self.config.name,
-                    "version": version,
-                    "release": release,
-                    "message": "Unknown failure",
-                    "status": -1,
-                    # Status defaults to failure until explicitly set by success. This handles raised exceptions.
-                }
-
-                # pull just the main image name first
-                image_name_and_version = "%s:%s-%s" % (self.config.name, version, release)
-
-                # The source image
-                brew_image_url = "/".join((self.runtime.group_config.urls.brew_image_host, image_name_and_version))
-                # This wouldn't be strictly necessary. Unless it is
-                # IMPLICITLY meant to be done as a sanity check before
-                # attempting further operations.
-                pull_image(brew_image_url)
-                record['message'] = "Successfully pulled image"
-                record['status'] = 0
-            except Exception as err:
-                record["message"] = "Exception occurred: %s" % str(err)
-                self.logger.info("Error pulling %s: %s" % (self.metadata.name, err))
-                raise
-            finally:
-                # Wouldn't need this either if we aren't pulling every image first
-                self.runtime.add_record('pull', **record)
+            image_name_and_version = "%s:%s-%s" % (self.config.name, version, release)
+            brew_image_url = "/".join((self.runtime.group_config.urls.brew_image_host, image_name_and_version))
 
             push_tags = list(tag_list)
 
@@ -516,75 +488,64 @@ class ImageDistGitRepo(DistGitRepo):
             if not push_tags:
                 push_tags = self.metadata.get_default_push_tags(version, release)
 
+            # Build a list of everything we're going to push to
+            all_push_urls = []
+
+            # Generate all of the final push urls
             for image_name in push_names:
-                try:
+                # Keep for when we add record{}s back in
+                repo = image_name.split('/', 1)
+                for push_tag in push_tags:
+                    # Collect next SRC=DEST input
+                    self.logger.info("Adding image named '{}' to push list".format(image_name))
+                    all_push_urls.append("{}={}".format(brew_image_url, '{}:{}'.format(image_name, push_tag)))
 
-                    repo = image_name.split('/', 1)
+            if dry_run:
+                for push_url in all_push_urls:
+                    self.logger.info('Would have tagged {} as {}'.format(brew_image_url, push_url))
+                dr = "--dry-run=true"
+            else:
+                dr = ""
 
-                    action = "push"
-                    record = {
-                        "distgit_key": self.metadata.distgit_key,
-                        "distgit": '{}/{}'.format(self.metadata.namespace, self.metadata.name),
-                        "repo": repo,  # ns/repo
-                        "name": image_name,  # full registry/ns/repo
-                        "version": version,
-                        "release": release,
-                        "message": "Unknown failure",
-                        "tags": ", ".join(push_tags),
-                        "status": -1,
-                        # Status defaults to failure until explicitly set by success. This handles raised exceptions.
-                    }
+            if self.runtime.group_config.insecure_source:
+                insecure = "--insecure=true"
+            else:
+                insecure = ""
 
-                    # We wouldn't need a for loop for this part with
-                    # 'oc image mirror'. The only 'loop'y thing we
-                    # might have to do is to generate all of the
-                    # 'push_url's. With 'oc image mirror' it runs once
-                    # with a variable length set of SRC=DEST arguments
-                    for push_tag in push_tags:
-                        push_url = '{}:{}'.format(image_name, push_tag)
+            mirror_cmd = ["oc", "image", "mirror", dr, insecure]
+            mirror_cmd.extend(all_push_urls)
 
-                        if dry_run:
-                            rc = 0
-                            self.logger.info('Would have tagged {} as {}'.format(brew_image_url, push_url))
-                            self.logger.info('Would have pushed {}'.format(push_url))
-                        else:
-                            # Switching to 'oc image mirror' means we
-                            # won't have to tag each image before
-                            # pushing it
-                            rc, out, err = exectools.cmd_gather(["docker", "tag", brew_image_url, push_url])
+            self.logger.info("Going to run: {}".format(" ".join(mirror_cmd)))
 
-                            if rc != 0:
-                                # Unable to tag the image
-                                raise IOError("Error tagging image as: %s" % push_url)
+            # rc, out, err = exectools.cmd_gather(mirror_cmd)
 
-                            # This would be an invocation of 'oc image mirror'
-                            for r in range(10):
-                                self.logger.info("Pushing image to mirror [retry=%d]: %s" % (r, push_url))
-                                rc, out, err = exectools.cmd_gather(["docker", "push", push_url])
-                                if rc == 0:
-                                    break
-                                # This is still useful in case the
-                                # mirroring failes. Will exist
-                                # elsewhere though as this for loop
-                                # won't exist anymore
-                                self.logger.info("Error pushing image -- retrying in 60 seconds")
-                                time.sleep(60)
+                #     # This would be an invocation of 'oc image mirror'
+                #     for r in range(10):
+                #         self.logger.info("Pushing image to mirror [retry=%d]: %s" % (r, push_url))
+                #         # rc, out, err = exectools.cmd_gather(["echo", "oc", "image", "mirror", push_url])
+                #         # if rc == 0:
+                #         #     break
+                #         # self.logger.info("Error pushing image -- retrying in 60 seconds")
+                #         # time.sleep(60)
 
-                        # Keep this too, methinks
-                        if rc != 0:
-                            # Unable to push to registry
-                            raise IOError("Error pushing image: %s" % push_url)
+                #         # hardcode this while testing
+                #         rc = 0
 
-                    record["message"] = "Successfully pushed all tags"
-                    record["status"] = 0
+                #     # Keep this too, methinks
+                #     if rc != 0:
+                #         # Unable to push to registry
+                #         raise IOError("Error pushing image: %s" % push_url)
 
-                except Exception as err:
-                    record["message"] = "Exception occurred: %s" % str(err)
-                    self.logger.info("Error pushing %s: %s" % (self.metadata.name, err))
-                    raise
+                #         record["message"] = "Successfully pushed all tags"
+                #         record["status"] = 0
 
-                finally:
-                    self.runtime.add_record(action, **record)
+                # except Exception as err:
+                #     record["message"] = "Exception occurred: %s" % str(err)
+                #     self.logger.info("Error pushing %s: %s" % (self.metadata.name, err))
+                #     raise
+
+                # finally:
+                #     self.runtime.add_record(action, **record)
 
             return True
 
