@@ -1516,7 +1516,12 @@ def release_mirror(runtime, src_dest, image_stream, is_base, pattern):
     missing_source_items = []
     invalid_name_items = []
 
-    for image in images:
+    # for image in images:
+    def release_gen_consider_image(image):
+        """Consider this image for mirroring.
+
+        :param doozerlib.image.Image image: The image to consider for mirroring
+        """
         click.echo("###############################################################")
         dfp = DockerfileParser(path=runtime.working_dir)
         try:
