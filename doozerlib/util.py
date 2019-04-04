@@ -59,3 +59,17 @@ def dict_get(dct, path, default=DICT_EMPTY):
                 raise Exception('Unable to follow key path {}'.format(path))
             return default
     return dct
+
+
+def progress_func(func, char='*'):
+    """Use to wrap functions called in parallel. Prints a character for
+each function call.
+
+    :param lambda-function func: A 'lambda wrapped' function to call
+    after printing a progress character
+    :param str char: The character (or multi-char string, if you
+    really wanted to) to print before calling `func`
+
+    """
+    click.secho(char, fg='green', nl=False)
+    return func()

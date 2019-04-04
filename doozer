@@ -13,7 +13,7 @@ from doozerlib.config import valid_updates
 from doozerlib import cli_opts
 from doozerlib.exceptions import DoozerFatalError
 from doozerlib import exectools
-from doozerlib.util import green_prefix, red_prefix, green_print, red_print, yellow_print, yellow_prefix, color_print, dict_get
+from doozerlib.util import green_prefix, red_prefix, green_print, red_print, yellow_print, yellow_prefix, color_print, dict_get, progress_func
 import datetime
 import click
 import os
@@ -23,6 +23,7 @@ import sys
 import subprocess
 import urllib
 import tempfile
+import time
 import traceback
 import koji
 from numbers import Number
@@ -1516,13 +1517,11 @@ def release_mirror(runtime, src_dest, image_stream, is_base, pattern):
     missing_source_items = []
     invalid_name_items = []
 
-    # for image in images:
     def release_gen_consider_image(image):
         """Consider this image for mirroring.
 
         :param doozerlib.image.Image image: The image to consider for mirroring
         """
-        click.echo("###############################################################")
         dfp = DockerfileParser(path=runtime.working_dir)
         try:
             dfp.content = image.fetch_cgit_file("Dockerfile")
@@ -1552,7 +1551,7 @@ def release_mirror(runtime, src_dest, image_stream, is_base, pattern):
             except IOError as err:
                 red_prefix("Error looking up build info (skipping): ")
                 click.echo(str(err))
-                continue
+                return None
 
         s = s.replace("{release}", release)
 
@@ -1579,19 +1578,31 @@ def release_mirror(runtime, src_dest, image_stream, is_base, pattern):
             (src, dest) = s.split('=')
 
             # Don't try to mirror things that don't exist # --tls-verify=false
-            try:
-                if subprocess.call("/bin/skopeo inspect docker://{} >/dev/null".format(src),
-                                   shell=True) == 0:
-                    green_prefix("Verified source image exists and complies with naming conventions: ")
-                    click.echo(src)
-                else:
-                    red_prefix("NOT adding to IS (source image does not exist): ")
-                    click.echo(src)
-                    missing_source_items.append(src)
-                    continue
-            except OSError as e:
-                click.echo("Error! {}".format(str(e)))
-                raise e
+            max_tries = 10
+            tries = 0
+            err = None
+            while tries <= max_tries:
+                try:
+                    if subprocess.call("/bin/skopeo inspect docker://{} >/dev/null".format(src),
+                                       shell=True) == 0:
+                        green_prefix("Verified source image exists and complies with naming conventions: ")
+                        click.echo(src)
+                        break
+                    else:
+                        missing_source_items.append(src)
+                        red_prefix("NOT adding to IS (source image does not exist): ")
+                        click.echo(src)
+                        return None
+                except OSError as e:
+                    click.secho('retry for {}'.format(image.image_name), bold=True, fg='yellow')
+                    tries += 1
+                    err = e
+                    time.sleep(1)
+                    click.echo("Error! {}".format(str(e)))
+            if tries >= max_tries:
+                click.echo("Error after {} tries! {}".format(tries, str(err)))
+                return None
+
 
             green_prefix("ADDING to IS: ")
             print(s)
@@ -1614,8 +1625,38 @@ def release_mirror(runtime, src_dest, image_stream, is_base, pattern):
             print(s)
             invalid_name_items.append(s)
 
-        # End 'for image in images' loop
+        # End 'def release_gen_consider_image()'
         #############################################################
+
+    green_prefix("Validating for mirroring:")
+    click.echo(" {} images".format(len(images)))
+
+    # 'Full' bar so people have an idea of relative progress
+    click.secho("[", nl=False)
+    click.secho("*" * len(images), nl=False, fg='green')
+    click.echo("]")
+
+    # Beginning of to-be-filled-in bar
+    click.secho("[", nl=False)
+
+    # pool = ThreadPool(cpu_count())
+    pool = ThreadPool(4)
+    validation_results = pool.map(
+        lambda image: progress_func(
+            lambda: release_gen_consider_image(image),
+            ''),
+        images)
+    # Wait for results
+    pool.close()
+    pool.join()
+    # End of filled in bar
+    click.echo(']')
+
+    click.echo("########################################")
+
+    click.echo("src=dest items")
+    for i in src_dest_items:
+        click.echo(" {}".format(i))
 
     # Save the SRC=DEST 'oc image mirror' input to a file for later
     with open(src_dest, 'w+') as out_file:
@@ -1630,12 +1671,10 @@ def release_mirror(runtime, src_dest, image_stream, is_base, pattern):
     yellow_prefix("Images skipped due to invalid naming:\n")
     for img in sorted(invalid_name_items):
         click.echo(" {}".format(img))
-        click.echo()
 
     yellow_prefix("Images skipped due to missing source:\n")
     for img in sorted(missing_source_items):
         click.echo(" {}".format(img))
-        click.echo()
 
 
 @cli.command("beta:reposync", short_help="Sync yum repos listed in group.yaml to local directory.")
